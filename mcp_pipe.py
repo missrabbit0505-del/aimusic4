@@ -18,6 +18,7 @@ import signal
 import sys
 import random
 from dotenv import load_dotenv
+from aiohttp import web  # 新增
 
 # Load environment variables from .env file
 load_dotenv()
@@ -166,26 +167,42 @@ def signal_handler(sig, frame):
     logger.info("Received interrupt signal, shutting down...")
     sys.exit(0)
 
+# 新增 HTTP Server 功能，避免 Render 警告沒開 port
+async def health_check(request):
+    return web.Response(text="OK")
+
+async def start_http_server():
+    app = web.Application()
+    app.router.add_get('/health', health_check)
+    port = int(os.environ.get('PORT', 8000))
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    logger.info(f"HTTP health server started on port {port}")
+
+async def main():
+    # 同時啟動 HTTP server 跟 MCP WebSocket 客戶端
+    endpoint_url = os.environ.get('MCP_ENDPOINT')
+    if not endpoint_url:
+        logger.error("Please set the `MCP_ENDPOINT` environment variable")
+        sys.exit(1)
+    await start_http_server()
+    await connect_with_retry(endpoint_url)
+
 if __name__ == "__main__":
-    # Register signal handler
+    # 註冊 signal handler
     signal.signal(signal.SIGINT, signal_handler)
     
-    # mcp_script
+    # 參數檢查
     if len(sys.argv) < 2:
         logger.error("Usage: mcp_pipe.py <mcp_script>")
         sys.exit(1)
     
     mcp_script = sys.argv[1]
     
-    # Get token from environment variable or command line arguments
-    endpoint_url = os.environ.get('MCP_ENDPOINT')
-    if not endpoint_url:
-        logger.error("Please set the `MCP_ENDPOINT` environment variable")
-        sys.exit(1)
-    
-    # Start main loop
     try:
-        asyncio.run(connect_with_retry(endpoint_url))
+        asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("Program interrupted by user")
     except Exception as e:
